@@ -76,6 +76,8 @@ class FakeTransport:
         # ieee -> Hue features bitmap; None means no response
         self.features: dict[str, int | None] = {}
         self.feature_reads: list[str] = []
+        # lamps a command to one lamp cannot be sent to
+        self.unreachable: set[str] = set()
 
     async def async_scene_request(
         self, lamp: Lamp, command_id: int, payload: bytes, *, manufacturer: int | None = None
@@ -112,6 +114,8 @@ class FakeTransport:
     ) -> None:
         """Record a command sent to one lamp."""
         self.commands.append((lamp.ieee, cluster_id, command_id, payload))
+        if lamp.ieee in self.unreachable:
+            raise TransportError("not sent")
 
     async def async_group_command(
         self, group_id: int, cluster_id: int, command_id: int, payload: bytes

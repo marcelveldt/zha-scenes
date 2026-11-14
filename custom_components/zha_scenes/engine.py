@@ -439,9 +439,9 @@ class SceneEngine:
         the lamp of a single-light zone, followed by Move to Level for `brightness`. With
         `brightness`, lamps with the Hue effects cluster get the scene at that level in one
         Signify command instead; the other lamps of their zone then get the recall and Move
-        to Level as unicasts. Lamps that could not store the scene are set with `set_lamp`
-        instead. On/off lights store nothing; they are set with `set_lamp` to their content,
-        without `brightness`.
+        to Level as unicasts. Lamps that could not store the scene, or not get those
+        unicasts, are set with `set_lamp` instead. On/off lights store nothing; they are set
+        with `set_lamp` to their content, without `brightness`.
 
         :param zone: The zone to recall the scene on.
         :param scene_id: ZCL scene id; the scene is stored under the zone's group, under group
@@ -501,8 +501,7 @@ class SceneEngine:
                     missing.append((lamp, content))
             missing += await self._async_store_state(zone, group_id, scene_id, to_store, set_lamp)
 
-            recall_group, lamps = zone.group_id, [lamp for lamp, _ in dimmable]
-            hue = [lamp for lamp in lamps if lamp.hue_effects]
+            hue = [lamp for lamp, _ in dimmable if lamp.hue_effects]
             if brightness is not None and hue:
                 # Hue lamps take the scene at the brightness in one command; a Move to Level after
                 # the Recall Scene would show them the scene's own level first
@@ -515,14 +514,26 @@ class SceneEngine:
                 else:
                     await self._transport.async_start_dynamic(zone.group_id, payload)
                 # unicasts to the other lamps, so the Hue lamps do not get the Recall Scene
-                recall_group, lamps = None, [lamp for lamp in lamps if not lamp.hue_effects]
-            payload = recall_scene_payload(group_id, scene_id, transition)
-            await self._async_send(recall_group, lamps, CLUSTER_SCENES, CMD_RECALL_SCENE, payload)
-            if brightness is not None:
-                payload = move_to_level_payload(brightness, fade)
-                await self._async_send(
-                    recall_group, lamps, CLUSTER_LEVEL, CMD_MOVE_TO_LEVEL, payload
+                skipped = {lamp.ieee for lamp, _ in missing}
+                others = [
+                    (lamp, content)
+                    for lamp, content in dimmable
+                    if not lamp.hue_effects and lamp.ieee not in skipped
+                ]
+                recall = recall_scene_payload(group_id, scene_id, transition)
+                level = move_to_level_payload(brightness, fade)
+                sent = await asyncio.gather(
+                    *(self._async_recall_lamp(lamp, recall, level) for lamp, _ in others)
                 )
+                missing += [entry for entry, ok in zip(others, sent, strict=True) if not ok]
+            else:
+                payload = recall_scene_payload(group_id, scene_id, transition)
+                await self._async_send(zone, dimmable, CLUSTER_SCENES, CMD_RECALL_SCENE, payload)
+                if brightness is not None:
+                    payload = move_to_level_payload(brightness, fade)
+                    await self._async_send(
+                        zone, dimmable, CLUSTER_LEVEL, CMD_MOVE_TO_LEVEL, payload
+                    )
             await asyncio.gather(
                 *(
                     set_lamp(
@@ -640,18 +651,29 @@ class SceneEngine:
 
     async def _async_send(
         self,
-        group_id: int | None,
-        lamps: Sequence[Lamp],
+        zone: ZoneConfig,
+        contents: Sequence[tuple[Lamp, StaticSceneContent]],
         cluster_id: int,
         command_id: int,
         payload: bytes,
     ) -> None:
-        """Groupcast a command to a Zigbee group, or without a group unicast it to each lamp."""
-        if group_id is None:
-            for lamp in lamps:
+        """Groupcast a command to the zone's group, or unicast it to the lamp of a single light."""
+        if zone.group_id is None:
+            for lamp, _ in contents:
                 await self._transport.async_command(lamp, cluster_id, command_id, payload)
         else:
-            await self._transport.async_group_command(group_id, cluster_id, command_id, payload)
+            await self._transport.async_group_command(
+                zone.group_id, cluster_id, command_id, payload
+            )
+
+    async def _async_recall_lamp(self, lamp: Lamp, recall: bytes, level: bytes) -> bool:
+        """Unicast Recall Scene and Move to Level to one lamp; return whether both were sent."""
+        try:
+            await self._transport.async_command(lamp, CLUSTER_SCENES, CMD_RECALL_SCENE, recall)
+            await self._transport.async_command(lamp, CLUSTER_LEVEL, CMD_MOVE_TO_LEVEL, level)
+        except TransportError:
+            return False
+        return True
 
     async def _async_request(self, lamp: Lamp, command_id: int, payload: bytes) -> int | None:
         """Send a Scenes command to one lamp; return the ZCL status, None without response."""

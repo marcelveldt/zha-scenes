@@ -115,7 +115,7 @@ brightness. Signify lamps with the Hue effects cluster (`0xFC03`) therefore get 
 the Signify command that starts a palette, without palette and speed, recalls the stored scene at that
 level (group, scene, flags `0x01` transition and `0x02` brightness, the transition, the level). A lamp
 that stores the scene as off stays off. The other lamps of such a zone get the Recall Scene and Move to
-Level as unicasts, so the Hue lamps do not get them too.
+Level as unicasts, so the Hue lamps do not get them too; one they cannot be sent to is set instead.
 
 Like palettes, standard scenes are written when they are activated, and only to lamps whose stored content
 is unknown or different:

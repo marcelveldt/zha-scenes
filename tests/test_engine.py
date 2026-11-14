@@ -636,8 +636,8 @@ async def test_other_lamps_next_to_hue_lamps_get_the_brightness_as_unicasts() ->
     # unicasts, so the Hue lamp does not get the Recall Scene
     assert transport.commands == [
         (OTHER.ieee, CLUSTER_SCENES, CMD_RECALL_SCENE, recall_scene_payload(GROUP, 12)),
-        (plain.ieee, CLUSTER_SCENES, CMD_RECALL_SCENE, recall_scene_payload(GROUP, 12)),
         (OTHER.ieee, CLUSTER_LEVEL, CMD_MOVE_TO_LEVEL, move_to_level_payload(100, 4)),
+        (plain.ieee, CLUSTER_SCENES, CMD_RECALL_SCENE, recall_scene_payload(GROUP, 12)),
         (plain.ieee, CLUSTER_LEVEL, CMD_MOVE_TO_LEVEL, move_to_level_payload(100, 4)),
     ]
     assert transport.group_commands == []
@@ -650,6 +650,28 @@ async def test_other_lamps_next_to_hue_lamps_get_the_brightness_as_unicasts() ->
     ]
     assert transport.commands == []
     assert len(transport.groupcasts) == 1
+
+
+async def test_other_lamp_that_cannot_be_reached_is_set_instead() -> None:
+    transport, _, engine = _engine()
+    setter = Setter(transport)
+    plain = lamp(4, LampKind.COLOR, hue_effects=False)
+    contents = [(lamp(1), WHITE), (OTHER, WHITE), (plain, WHITE)]
+    await engine.async_recall(ZONE, 12, contents, setter, brightness=100)
+    setter.calls.clear()
+    transport.commands.clear()
+
+    transport.unreachable.add(OTHER.ieee)
+    await engine.async_recall(ZONE, 12, contents, setter, brightness=100)
+
+    # the lamp after it still gets the scene
+    assert transport.commands[-2:] == [
+        (plain.ieee, CLUSTER_SCENES, CMD_RECALL_SCENE, recall_scene_payload(GROUP, 12)),
+        (plain.ieee, CLUSTER_LEVEL, CMD_MOVE_TO_LEVEL, move_to_level_payload(100, 4)),
+    ]
+    assert [(ieee, content) for ieee, content, *_ in setter.calls] == [
+        (OTHER.ieee, replace(WHITE, level=100))
+    ]
 
 
 async def test_single_hue_lamp_takes_the_scene_at_another_brightness_as_a_unicast() -> None:
@@ -691,7 +713,8 @@ async def test_lamps_without_room_are_skipped_and_set_instead(
         [(lamp(1).ieee, dimmed, 4, 3), (OTHER.ieee, dimmed, 4, 3)]
     )
     assert transport.groupcasts[-1] == (GROUP, hue_recall_payload(GROUP, 18, brightness=200))
-    assert len(transport.commands) == 2
+    # the other lamp has no scene to recall
+    assert transport.commands == []
     assert "light.lamp_01 could not store scene 0x12 of zone 56722 (status 0x89)" in caplog.text
     assert "light.lamp_05 could not store scene 0x12 of zone 56722 (status 0x89)" in caplog.text
 
