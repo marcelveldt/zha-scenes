@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
+import logging
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.zha.helpers import (
@@ -25,7 +27,7 @@ from zha.application.const import (
 )
 from zha.application.platforms.light import BaseLight, Light
 from zha.application.platforms.light.const import ColorMode
-from zigpy.exceptions import ZigbeeException
+from zigpy.exceptions import DeliveryError, ZigbeeException
 from zigpy.profiles import zha as zha_profile
 from zigpy.types import EUI64
 from zigpy.zcl.foundation import ReadAttributesResponse, Status
@@ -46,12 +48,21 @@ if TYPE_CHECKING:
     from zha.zigbee.device import Device
     from zha.zigbee.group import Group
 
+_LOGGER = logging.getLogger(__name__)
+
 # manufacturer names of Signify lamps, as ZHA matches them for its Hue light
 SIGNIFY_MANUFACTURERS = frozenset({"Philips", "Signify Netherlands B.V."})
+# retries of a failed send and the seconds between them, long enough for a busy channel to clear
+SEND_RETRIES = 2
+SEND_RETRY_DELAY = 0.5
 
 
 class ZhaSceneTransport:
-    """Sends Scenes cluster frames through ZHA's zigpy application controller."""
+    """
+    Sends Scenes cluster frames through ZHA's zigpy application controller.
+
+    A failed send is tried again before an error is raised.
+    """
 
     def __init__(self, hass: HomeAssistant) -> None:
         """Initialize the transport."""
@@ -76,6 +87,8 @@ class ZhaSceneTransport:
                 tsn,
                 zcl_frame(tsn, command_id, payload, manufacturer=manufacturer),
                 command_id=command_id,
+                retries=SEND_RETRIES,
+                retry_delay=SEND_RETRY_DELAY,
             )
         except (ZigbeeException, TimeoutError) as err:
             raise TransportError(str(err) or type(err).__name__) from err
@@ -93,7 +106,10 @@ class ZhaSceneTransport:
         cluster = device.device.endpoints[lamp.endpoint_id].in_clusters[CLUSTER_HUE_EFFECTS]
         try:
             response = await cluster.read_attributes_raw(
-                [ATTR_HUE_FEATURES], manufacturer=MANUFACTURER_SIGNIFY
+                [ATTR_HUE_FEATURES],
+                manufacturer=MANUFACTURER_SIGNIFY,
+                retries=SEND_RETRIES,
+                retry_delay=SEND_RETRY_DELAY,
             )
         except (ZigbeeException, TimeoutError) as err:
             raise TransportError(str(err) or type(err).__name__) from err
@@ -150,7 +166,13 @@ class ZhaSceneTransport:
         )
         try:
             await endpoint.request(
-                cluster_id, tsn, frame, command_id=command_id, expect_reply=False
+                cluster_id,
+                tsn,
+                frame,
+                command_id=command_id,
+                expect_reply=False,
+                retries=SEND_RETRIES,
+                retry_delay=SEND_RETRY_DELAY,
             )
         except (ZigbeeException, TimeoutError) as err:
             raise TransportError(str(err) or type(err).__name__) from err
@@ -176,9 +198,18 @@ class ZhaSceneTransport:
             tsn, command_id, payload, manufacturer=manufacturer, disable_default_response=True
         )
         try:
-            await group.request(  # type: ignore[no-untyped-call]
-                zha_profile.PROFILE_ID, cluster_id, tsn, frame
-            )
+            for attempt in range(SEND_RETRIES + 1):
+                try:
+                    await group.request(  # type: ignore[no-untyped-call]
+                        zha_profile.PROFILE_ID, cluster_id, tsn, frame
+                    )
+                except DeliveryError as err:
+                    if attempt == SEND_RETRIES:
+                        raise
+                    _LOGGER.debug("Groupcast to group 0x%04x not sent: %s", group_id, err)
+                    await asyncio.sleep(SEND_RETRY_DELAY)
+                else:
+                    return
         except (ZigbeeException, TimeoutError) as err:
             raise TransportError(str(err) or type(err).__name__) from err
 
