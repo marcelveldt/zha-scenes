@@ -1,7 +1,7 @@
 """Frames and reads through ZHA's zigpy application, with zigpy's own response parsing."""
 
 from collections.abc import Generator
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -14,6 +14,7 @@ from zigpy.types import EUI64
 from zigpy.zcl import foundation
 from zigpy.zcl.clusters.general import Scenes
 
+from custom_components.zha_scenes import zigbee
 from custom_components.zha_scenes.engine import TransportError
 from custom_components.zha_scenes.models import LampKind, ZoneConfig
 from custom_components.zha_scenes.protocol import (
@@ -28,6 +29,8 @@ from custom_components.zha_scenes.protocol import (
     MANUFACTURER_SIGNIFY,
 )
 from custom_components.zha_scenes.zigbee import (
+    SEND_RETRIES,
+    SEND_RETRY_DELAY,
     ZhaSceneTransport,
     async_color_temperature_lights,
     async_device_lights,
@@ -51,6 +54,23 @@ def endpoint() -> Generator[MagicMock]:
         yield endpoint
 
 
+@pytest.fixture
+def group(monkeypatch: pytest.MonkeyPatch) -> Generator[MagicMock]:
+    """
+    Return the zigpy group of the zone behind a fake ZHA gateway; its tsn is 0x2a.
+
+    A failed groupcast is sent again without waiting.
+    """
+    monkeypatch.setattr(zigbee, "SEND_RETRY_DELAY", 0)
+    group = MagicMock()
+    group.get_sequence.return_value = 0x2A
+    group.request = AsyncMock(return_value=None)
+    proxy = MagicMock()
+    proxy.gateway.groups = {GROUP: MagicMock(zigpy_group=group)}
+    with patch(f"{INTEGRATION}.zigbee.get_zha_gateway_proxy", return_value=proxy):
+        yield group
+
+
 @pytest.mark.parametrize("status", [0x00, 0x89])
 async def test_signify_add_scene(hass: HomeAssistant, endpoint: MagicMock, status: int) -> None:
     # how a Signe answered the bridge, parsed by zigpy's Scenes cluster
@@ -63,7 +83,12 @@ async def test_signify_add_scene(hass: HomeAssistant, endpoint: MagicMock, statu
 
     assert result == status
     endpoint.request.assert_awaited_once_with(
-        CLUSTER_SCENES, 0x2A, bytes.fromhex("050b102a020102"), command_id=CMD_ADD_HUE_SCENE
+        CLUSTER_SCENES,
+        0x2A,
+        bytes.fromhex("050b102a020102"),
+        command_id=CMD_ADD_HUE_SCENE,
+        retries=SEND_RETRIES,
+        retry_delay=SEND_RETRY_DELAY,
     )
 
 
@@ -74,7 +99,10 @@ async def test_read_features(hass: HomeAssistant, endpoint: MagicMock) -> None:
 
     assert await ZhaSceneTransport(hass).async_read_features(lamp(1)) == 0x2F
     cluster.read_attributes_raw.assert_awaited_once_with(
-        [ATTR_HUE_FEATURES], manufacturer=MANUFACTURER_SIGNIFY
+        [ATTR_HUE_FEATURES],
+        manufacturer=MANUFACTURER_SIGNIFY,
+        retries=SEND_RETRIES,
+        retry_delay=SEND_RETRY_DELAY,
     )
 
 
@@ -109,6 +137,8 @@ async def test_start_dynamic_lamp(hass: HomeAssistant, endpoint: MagicMock) -> N
         bytes.fromhex("150b102a000102"),
         command_id=CMD_DYNAMIC_PALETTE,
         expect_reply=False,
+        retries=SEND_RETRIES,
+        retry_delay=SEND_RETRY_DELAY,
     )
 
 
@@ -124,24 +154,51 @@ async def test_command(hass: HomeAssistant, endpoint: MagicMock) -> None:
         bytes.fromhex("112a00c8"),
         command_id=CMD_MOVE_TO_LEVEL,
         expect_reply=False,
+        retries=SEND_RETRIES,
+        retry_delay=SEND_RETRY_DELAY,
     )
 
 
-async def test_group_command(hass: HomeAssistant) -> None:
-    group = MagicMock()
-    group.get_sequence.return_value = 0x2A
-    group.request = AsyncMock(return_value=None)
-    proxy = MagicMock()
-    proxy.gateway.groups = {GROUP: MagicMock(zigpy_group=group)}
-    with patch(f"{INTEGRATION}.zigbee.get_zha_gateway_proxy", return_value=proxy):
-        await ZhaSceneTransport(hass).async_group_command(
-            GROUP, CLUSTER_SCENES, CMD_RECALL_SCENE, b"\x92\xdd\x0a"
-        )
+async def test_group_command(hass: HomeAssistant, group: MagicMock) -> None:
+    await ZhaSceneTransport(hass).async_group_command(
+        GROUP, CLUSTER_SCENES, CMD_RECALL_SCENE, b"\x92\xdd\x0a"
+    )
 
     # the Home Automation profile, cluster specific without default response, command 0x05
     group.request.assert_awaited_once_with(
         0x0104, CLUSTER_SCENES, 0x2A, bytes.fromhex("112a0592dd0a")
     )
+
+
+async def test_group_command_sent_again(hass: HomeAssistant, group: MagicMock) -> None:
+    # the radio found no clear channel the first time
+    group.request.side_effect = [DeliveryError("Send failed: CCA_FAILURE"), None]
+
+    await ZhaSceneTransport(hass).async_group_command(
+        GROUP, CLUSTER_SCENES, CMD_RECALL_SCENE, b"\x92\xdd\x0a"
+    )
+
+    frame = call(0x0104, CLUSTER_SCENES, 0x2A, bytes.fromhex("112a0592dd0a"))
+    assert group.request.await_args_list == [frame, frame]
+
+
+async def test_group_command_not_sent(hass: HomeAssistant, group: MagicMock) -> None:
+    group.request.side_effect = DeliveryError("Send failed: CCA_FAILURE")
+    with pytest.raises(TransportError, match="CCA_FAILURE"):
+        await ZhaSceneTransport(hass).async_group_command(
+            GROUP, CLUSTER_SCENES, CMD_RECALL_SCENE, b"\x92\xdd\x0a"
+        )
+    assert group.request.await_count == SEND_RETRIES + 1
+
+
+async def test_group_command_timeout(hass: HomeAssistant, group: MagicMock) -> None:
+    group.request.side_effect = TimeoutError
+    with pytest.raises(TransportError, match="TimeoutError"):
+        await ZhaSceneTransport(hass).async_group_command(
+            GROUP, CLUSTER_SCENES, CMD_RECALL_SCENE, b"\x92\xdd\x0a"
+        )
+    # only a frame that was not sent is sent again
+    group.request.assert_awaited_once()
 
 
 async def test_start_dynamic_lamp_not_delivered(hass: HomeAssistant, endpoint: MagicMock) -> None:

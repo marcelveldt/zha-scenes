@@ -199,7 +199,8 @@ and the write is retried once.
   gradient scene command that of Remove Scene, so ZHA's cluster command service would encode them as those
   standard commands. Frames are therefore built here and sent raw: the unicasts through the zigpy endpoint
   (so ZHA's request handling, retries and response matching apply) and the groupcast through the zigpy
-  group, like ZHA's own group commands.
+  group, like ZHA's own group commands. A failed send is tried again after a short pause, so a busy
+  channel can clear: the unicasts through those retries, the groupcast here.
 - **No polling or state tracking.** Lamps do not report a running palette, so the select entity shows the
   scene started last, by any entity or service.
 - **No Hue bridge needed.** The built-in palettes ship with the integration; nothing is read from or
