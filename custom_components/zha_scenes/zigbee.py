@@ -121,8 +121,9 @@ class ZhaSceneTransport:
 
     async def async_start_dynamic(self, group_id: int, payload: bytes) -> None:
         """
-        Groupcast the dynamic palette command to a Zigbee group.
+        Groupcast the Signify scene command to a Zigbee group.
 
+        :param payload: From `dynamic_palette_payload` or `hue_recall_payload`.
         :raises TransportError: The frame could not be sent.
         """
         await self.async_group_command(
@@ -135,8 +136,9 @@ class ZhaSceneTransport:
 
     async def async_start_dynamic_lamp(self, lamp: Lamp, payload: bytes) -> None:
         """
-        Unicast the dynamic palette command to one lamp.
+        Unicast the Signify scene command to one lamp.
 
+        :param payload: From `dynamic_palette_payload` or `hue_recall_payload`.
         :raises TransportError: The frame could not be sent.
         """
         await self.async_command(
@@ -358,28 +360,27 @@ def _single_lamp(hass: HomeAssistant, proxy: ZHAGatewayProxy, entity_id: str) ->
 
 def _lamp(device: Device, endpoint_id: int, entity_id: str, light: BaseLight) -> Lamp:
     """Return a light on an endpoint of a device as a lamp."""
+    signify = device.manufacturer in SIGNIFY_MANUFACTURERS
+    hue_effects = (
+        signify and CLUSTER_HUE_EFFECTS in device.device.endpoints[endpoint_id].in_clusters
+    )
     return Lamp(
         ieee=str(device.ieee),
         endpoint_id=endpoint_id,
         entity_id=entity_id,
-        kind=_lamp_kind(device, endpoint_id, light),
-        signify=device.manufacturer in SIGNIFY_MANUFACTURERS,
+        kind=_lamp_kind(light, hue_effects=hue_effects),
+        signify=signify,
+        hue_effects=hue_effects,
         max_mireds=(
             light.max_mireds if ColorMode.COLOR_TEMP in light.supported_color_modes else None
         ),
     )
 
 
-def _lamp_kind(device: Device, endpoint_id: int, light: BaseLight) -> LampKind:
-    """Return what a light can do, from its colour modes and Hue clusters."""
+def _lamp_kind(light: BaseLight, *, hue_effects: bool) -> LampKind:
+    """Return what a light can do, from its colour modes and the Hue effects cluster."""
     if ColorMode.XY in light.supported_color_modes:
-        endpoint = device.device.endpoints[endpoint_id]
-        if (
-            device.manufacturer in SIGNIFY_MANUFACTURERS
-            and CLUSTER_HUE_EFFECTS in endpoint.in_clusters
-        ):
-            return LampKind.DYNAMIC
-        return LampKind.COLOR
+        return LampKind.DYNAMIC if hue_effects else LampKind.COLOR
     if ColorMode.COLOR_TEMP in light.supported_color_modes:
         return LampKind.COLOR_TEMP
     if light.supported_color_modes == {ColorMode.ONOFF}:

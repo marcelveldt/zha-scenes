@@ -286,6 +286,7 @@ class Lamp:
     :param entity_id: Home Assistant light entity.
     :param kind: What the lamp can do with a palette.
     :param signify: Whether it is a Signify (Hue) lamp.
+    :param hue_effects: Whether it is a Signify lamp with the Hue effects cluster (`0xFC03`).
     :param max_mireds: Warmest colour temperature in mired; None for a lamp without colour
         temperature.
     """
@@ -295,4 +296,5 @@ class Lamp:
     entity_id: str
     kind: LampKind
     signify: bool
+    hue_effects: bool
     max_mireds: int | None

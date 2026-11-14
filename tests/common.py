@@ -28,6 +28,7 @@ def lamp(
     kind: LampKind = LampKind.DYNAMIC,
     *,
     signify: bool = True,
+    hue_effects: bool | None = None,
     max_mireds: int | None = 500,
 ) -> Lamp:
     """Return lamp number n, a Hue lamp with colour temperature unless told otherwise."""
@@ -38,6 +39,7 @@ def lamp(
         entity_id=f"light.lamp_{n:02d}",
         kind=kind,
         signify=signify,
+        hue_effects=signify if hue_effects is None else hue_effects,
         max_mireds=max_mireds,
     )
 
@@ -63,7 +65,7 @@ class FakeTransport:
         # manufacturer specific (Signify) unicasts
         self.signify_requests: list[tuple[str, int, bytes]] = []
         self.groupcasts: list[tuple[int, bytes]] = []
-        # dynamic palette starts sent to one lamp
+        # Signify scene commands sent to one lamp
         self.unicasts: list[tuple[str, bytes]] = []
         # other commands sent without waiting for a response: (ieee or group, cluster, command,
         # payload)
@@ -102,7 +104,7 @@ class FakeTransport:
         self.groupcasts.append((group_id, payload))
 
     async def async_start_dynamic_lamp(self, lamp: Lamp, payload: bytes) -> None:
-        """Record a dynamic start sent to one lamp."""
+        """Record a Signify scene command sent to one lamp."""
         self.unicasts.append((lamp.ieee, payload))
 
     async def async_command(

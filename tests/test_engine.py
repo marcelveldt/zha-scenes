@@ -45,6 +45,7 @@ from custom_components.zha_scenes.protocol import (
     add_static_scene_payload,
     dynamic_palette_payload,
     gradient_scene_payload,
+    hue_recall_payload,
     move_to_level_payload,
     recall_scene_payload,
     remove_scene_payload,
@@ -556,7 +557,7 @@ async def test_on_off_lights_store_nothing_and_are_set_after_the_recall() -> Non
     assert cache.stored(RELAY.ieee, GROUP, 12) is None
     # at every recall, with the scene's level instead of the zone's brightness
     assert setter.calls == [(RELAY.ieee, full, 4, 1), (RELAY.ieee, full, 4, 1)]
-    assert len(transport.group_commands) == 4
+    assert len(transport.groupcasts) == 2
 
     # a single on/off light gets no Scenes or Level command at all
     transport.requests.clear()
@@ -570,8 +571,8 @@ async def test_on_off_lights_store_nothing_and_are_set_after_the_recall() -> Non
 async def test_brightness_and_transition() -> None:
     transport, _, engine = _engine()
     setter = Setter(transport)
-    await engine.async_recall(ZONE, 12, [(lamp(1), WHITE)], setter, brightness=100, transition=15)
-    await engine.async_recall(ZONE, 12, [(lamp(1), WHITE)], setter, brightness=200)
+    await engine.async_recall(ZONE, 12, [(OTHER, WHITE)], setter, brightness=100, transition=15)
+    await engine.async_recall(ZONE, 12, [(OTHER, WHITE)], setter, brightness=200)
 
     assert transport.group_commands == [
         (GROUP, CLUSTER_SCENES, CMD_RECALL_SCENE, recall_scene_payload(GROUP, 12, 15)),
@@ -585,7 +586,9 @@ async def test_brightness_and_transition() -> None:
 async def test_single_light_zone_stores_in_group_zero_and_recalls_with_unicasts() -> None:
     transport, cache, engine = _engine()
     setter = Setter(transport)
-    await engine.async_recall(LIGHT_ZONE, 13, [(lamp(1), WHITE)], setter, brightness=50)
+    # a Hue lamp without the Hue effects cluster gets Move to Level for a brightness
+    plain = lamp(1, LampKind.COLOR, hue_effects=False)
+    await engine.async_recall(LIGHT_ZONE, 13, [(plain, WHITE)], setter, brightness=50)
 
     assert transport.requests == [
         (lamp(1).ieee, CMD_ENHANCED_ADD_SCENE, add_static_scene_payload(0, 13, WHITE, 4))
@@ -596,6 +599,66 @@ async def test_single_light_zone_stores_in_group_zero_and_recalls_with_unicasts(
     ]
     assert transport.group_commands == []
     assert cache.stored(lamp(1).ieee, 0, 13) == WHITE
+
+
+async def test_hue_lamps_take_the_scene_at_another_brightness_in_one_command() -> None:
+    transport, _, engine = _engine()
+    setter = Setter(transport)
+    contents = [(lamp(1), WHITE), (lamp(2, LampKind.COLOR_TEMP), WHITE)]
+    await engine.async_recall(ZONE, 12, contents, setter, brightness=100, transition=15)
+    await engine.async_recall(ZONE, 12, contents, setter, brightness=200)
+
+    # no Recall Scene and Move to Level, which show the scene's own level first
+    assert transport.groupcasts == [
+        (GROUP, hue_recall_payload(GROUP, 12, brightness=100, transition=15)),
+        (GROUP, hue_recall_payload(GROUP, 12, brightness=200)),
+    ]
+    assert transport.group_commands == []
+    assert transport.commands == []
+
+    # without a brightness they get the Recall Scene
+    await engine.async_recall(ZONE, 12, contents, setter)
+    assert transport.group_commands == [
+        (GROUP, CLUSTER_SCENES, CMD_RECALL_SCENE, recall_scene_payload(GROUP, 12))
+    ]
+    assert len(transport.groupcasts) == 2
+
+
+async def test_other_lamps_next_to_hue_lamps_get_the_brightness_as_unicasts() -> None:
+    transport, _, engine = _engine()
+    setter = Setter(transport)
+    # a Hue lamp without the Hue effects cluster is recalled like the other lamp
+    plain = lamp(4, LampKind.COLOR, hue_effects=False)
+    contents = [(lamp(1), WHITE), (OTHER, WHITE), (plain, WHITE)]
+    await engine.async_recall(ZONE, 12, contents, setter, brightness=100)
+
+    assert transport.groupcasts == [(GROUP, hue_recall_payload(GROUP, 12, brightness=100))]
+    # unicasts, so the Hue lamp does not get the Recall Scene
+    assert transport.commands == [
+        (OTHER.ieee, CLUSTER_SCENES, CMD_RECALL_SCENE, recall_scene_payload(GROUP, 12)),
+        (plain.ieee, CLUSTER_SCENES, CMD_RECALL_SCENE, recall_scene_payload(GROUP, 12)),
+        (OTHER.ieee, CLUSTER_LEVEL, CMD_MOVE_TO_LEVEL, move_to_level_payload(100, 4)),
+        (plain.ieee, CLUSTER_LEVEL, CMD_MOVE_TO_LEVEL, move_to_level_payload(100, 4)),
+    ]
+    assert transport.group_commands == []
+
+    # without a brightness one Recall Scene to all of them
+    transport.commands.clear()
+    await engine.async_recall(ZONE, 12, contents, setter)
+    assert transport.group_commands == [
+        (GROUP, CLUSTER_SCENES, CMD_RECALL_SCENE, recall_scene_payload(GROUP, 12))
+    ]
+    assert transport.commands == []
+    assert len(transport.groupcasts) == 1
+
+
+async def test_single_hue_lamp_takes_the_scene_at_another_brightness_as_a_unicast() -> None:
+    transport, _, engine = _engine()
+    await engine.async_recall(LIGHT_ZONE, 13, [(lamp(1), WHITE)], Setter(transport), brightness=50)
+
+    assert transport.unicasts == [(lamp(1).ieee, hue_recall_payload(0, 13, brightness=50))]
+    assert transport.commands == []
+    assert transport.groupcasts == []
 
 
 async def test_lamps_without_room_are_skipped_and_set_instead(
@@ -627,7 +690,8 @@ async def test_lamps_without_room_are_skipped_and_set_instead(
     assert sorted(setter.calls) == sorted(
         [(lamp(1).ieee, dimmed, 4, 3), (OTHER.ieee, dimmed, 4, 3)]
     )
-    assert len(transport.group_commands) == 2
+    assert transport.groupcasts[-1] == (GROUP, hue_recall_payload(GROUP, 18, brightness=200))
+    assert len(transport.commands) == 2
     assert "light.lamp_01 could not store scene 0x12 of zone 56722 (status 0x89)" in caplog.text
     assert "light.lamp_05 could not store scene 0x12 of zone 56722 (status 0x89)" in caplog.text
 

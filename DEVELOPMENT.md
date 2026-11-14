@@ -110,6 +110,13 @@ of any brand recall it. Activating one is a Recall Scene groupcast to the zone's
 single light), with the transition when one is given. A brightness follows as a Move to Level (without
 on/off) to the same group, in the same transition.
 
+Hue lamps would first show the scene's own level that way, a visible flash when they already are at the
+brightness. Signify lamps with the Hue effects cluster (`0xFC03`) therefore get a brightness in one step:
+the Signify command that starts a palette, without palette and speed, recalls the stored scene at that
+level (group, scene, flags `0x01` transition and `0x02` brightness, the transition, the level). A lamp
+that stores the scene as off stays off. The other lamps of such a zone get the Recall Scene and Move to
+Level as unicasts, so the Hue lamps do not get them too.
+
 Like palettes, standard scenes are written when they are activated, and only to lamps whose stored content
 is unknown or different:
 
