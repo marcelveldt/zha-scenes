@@ -14,6 +14,7 @@ from custom_components.zha_scenes.protocol import (
     add_static_scene_payload,
     dynamic_palette_payload,
     gradient_scene_payload,
+    hue_recall_payload,
     level_from_percent,
     move_to_level_payload,
     pack_palette_xy,
@@ -142,6 +143,14 @@ def test_dynamic_palette_group_and_optional_speed() -> None:
 def test_dynamic_palette_rejects_palette_size(count: int) -> None:
     with pytest.raises(ValueError, match="colours"):
         dynamic_palette_payload(0, 0x80, [(0.3, 0.3)] * count)
+
+
+def test_hue_recall_payload() -> None:
+    # as six Hue lamps took it: group, scene, flags (transition, brightness), transition, level
+    payload = hue_recall_payload(0xD80D, 13, brightness=101, transition=2)
+    assert payload == bytes.fromhex("0dd80d03020065")
+    # without a transition only the brightness flag; the level is limited to 254
+    assert hue_recall_payload(0xDD92, 0x0C, brightness=255).hex() == "92dd0c" + "02" + "fe"
 
 
 def test_pack_palette_xy_saturates() -> None:

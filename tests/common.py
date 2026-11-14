@@ -28,6 +28,7 @@ def lamp(
     kind: LampKind = LampKind.DYNAMIC,
     *,
     signify: bool = True,
+    hue_effects: bool | None = None,
     max_mireds: int | None = 500,
 ) -> Lamp:
     """Return lamp number n, a Hue lamp with colour temperature unless told otherwise."""
@@ -38,6 +39,7 @@ def lamp(
         entity_id=f"light.lamp_{n:02d}",
         kind=kind,
         signify=signify,
+        hue_effects=signify if hue_effects is None else hue_effects,
         max_mireds=max_mireds,
     )
 
@@ -63,7 +65,7 @@ class FakeTransport:
         # manufacturer specific (Signify) unicasts
         self.signify_requests: list[tuple[str, int, bytes]] = []
         self.groupcasts: list[tuple[int, bytes]] = []
-        # dynamic palette starts sent to one lamp
+        # Signify scene commands sent to one lamp
         self.unicasts: list[tuple[str, bytes]] = []
         # other commands sent without waiting for a response: (ieee or group, cluster, command,
         # payload)
@@ -74,6 +76,8 @@ class FakeTransport:
         # ieee -> Hue features bitmap; None means no response
         self.features: dict[str, int | None] = {}
         self.feature_reads: list[str] = []
+        # lamps a command to one lamp cannot be sent to
+        self.unreachable: set[str] = set()
 
     async def async_scene_request(
         self, lamp: Lamp, command_id: int, payload: bytes, *, manufacturer: int | None = None
@@ -102,7 +106,7 @@ class FakeTransport:
         self.groupcasts.append((group_id, payload))
 
     async def async_start_dynamic_lamp(self, lamp: Lamp, payload: bytes) -> None:
-        """Record a dynamic start sent to one lamp."""
+        """Record a Signify scene command sent to one lamp."""
         self.unicasts.append((lamp.ieee, payload))
 
     async def async_command(
@@ -110,6 +114,8 @@ class FakeTransport:
     ) -> None:
         """Record a command sent to one lamp."""
         self.commands.append((lamp.ieee, cluster_id, command_id, payload))
+        if lamp.ieee in self.unreachable:
+            raise TransportError("not sent")
 
     async def async_group_command(
         self, group_id: int, cluster_id: int, command_id: int, payload: bytes

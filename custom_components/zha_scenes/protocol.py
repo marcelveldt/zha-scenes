@@ -234,6 +234,26 @@ def dynamic_palette_payload(
     return struct.pack("<HBB", group_id, scene_id, flags) + fields
 
 
+def hue_recall_payload(
+    group_id: int, scene_id: int, *, brightness: int, transition: int | None = None
+) -> bytes:
+    """
+    Return the payload of the dynamic palette command without a palette.
+
+    Hue lamps apply the stored scene (group_id, scene_id) at the brightness in one step,
+    without showing the stored level first. A lamp that stores the scene as off stays off.
+
+    :param brightness: Level 1..254 instead of the stored level.
+    :param transition: Transition time in 1/10 s.
+    """
+    flags, fields = _FLAG_BRIGHTNESS, b""
+    if transition is not None:
+        flags |= _FLAG_TRANSITION
+        fields += struct.pack("<H", transition)
+    fields += bytes([min(MAX_LEVEL, brightness)])
+    return struct.pack("<HBB", group_id, scene_id, flags) + fields
+
+
 def pack_palette_xy(x: float, y: float) -> bytes:
     """Return a palette colour in the 3-byte, 12 bits per axis encoding."""
     qx = min(0xFFF, int(x * 0xFFF / _PALETTE_MAX_X))

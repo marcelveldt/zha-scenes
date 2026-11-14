@@ -24,6 +24,7 @@ from custom_components.zha_scenes.protocol import (
     StaticSceneContent,
     add_empty_scene_payload,
     add_static_scene_payload,
+    hue_recall_payload,
     move_to_level_payload,
     planckian_xy,
     recall_scene_payload,
@@ -183,9 +184,14 @@ async def test_lamps_that_could_not_store_the_scene_are_set_instead(
         blocking=True,
     )
 
-    assert transport.group_commands == [
-        (GROUP, CLUSTER_SCENES, CMD_RECALL_SCENE, recall_scene_payload(GROUP, 0x20, 15)),
-        (GROUP, CLUSTER_LEVEL, CMD_MOVE_TO_LEVEL, move_to_level_payload(128, 15)),
+    # the Hue lamps take the scene at the brightness in one command, the GLEDOPTO controller
+    # gets the recall and Move to Level
+    assert transport.groupcasts == [
+        (GROUP, hue_recall_payload(GROUP, 0x20, brightness=128, transition=15))
+    ]
+    assert transport.commands == [
+        (OTHER.ieee, CLUSTER_SCENES, CMD_RECALL_SCENE, recall_scene_payload(GROUP, 0x20, 15)),
+        (OTHER.ieee, CLUSTER_LEVEL, CMD_MOVE_TO_LEVEL, move_to_level_payload(128, 15)),
     ]
     # with the other brightness; the lamp that is off stays off
     assert {call.data["entity_id"]: call.data for call in turn_on}[HUE_COLOR.entity_id] == {

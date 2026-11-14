@@ -291,6 +291,20 @@ async def test_zone_lamps(hass: HomeAssistant, light_zone: ZoneConfig) -> None:
     assert async_zone_lamps(hass, light_zone) == [lamp(1)]
 
 
+async def test_hue_effects_cluster_of_signify_lamps(
+    hass: HomeAssistant, light_proxy: MagicMock, light_zone: ZoneConfig
+) -> None:
+    light = light_proxy.get_entity_reference("light.lamp_01").entity_data.entity
+    # a white ambiance lamp has it too
+    light.supported_color_modes = {ColorMode.COLOR_TEMP}
+    assert async_zone_lamps(hass, light_zone) == [lamp(1, LampKind.COLOR_TEMP)]
+
+    # a colour lamp without it does not animate palettes
+    light.device.device.endpoints[11].in_clusters = {}
+    light.supported_color_modes = {ColorMode.XY, ColorMode.COLOR_TEMP}
+    assert async_zone_lamps(hass, light_zone) == [lamp(1, LampKind.COLOR, hue_effects=False)]
+
+
 async def test_unavailable_single_light_has_no_lamps(
     hass: HomeAssistant, light_proxy: MagicMock, light_zone: ZoneConfig
 ) -> None:

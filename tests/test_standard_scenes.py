@@ -20,6 +20,7 @@ from custom_components.zha_scenes.protocol import (
     StaticSceneContent,
     add_empty_scene_payload,
     add_static_scene_payload,
+    hue_recall_payload,
     move_to_level_payload,
     recall_scene_payload,
     store_scene_payload,
@@ -139,21 +140,21 @@ async def test_activate_service_and_select(
         {ATTR_ENTITY_ID: "scene.zone_group_read", "brightness": 128, "speed": 0.3},
         blocking=True,
     )
-    assert transport.group_commands == [
-        (GROUP, CLUSTER_SCENES, CMD_RECALL_SCENE, recall_scene_payload(GROUP, 12)),
-        (GROUP, CLUSTER_LEVEL, CMD_MOVE_TO_LEVEL, move_to_level_payload(128, 4)),
+    # the Hue lamps take the scene at the brightness in one command, the GLEDOPTO controller
+    # gets the recall and Move to Level
+    assert transport.groupcasts == [(GROUP, hue_recall_payload(GROUP, 12, brightness=128))]
+    assert transport.commands == [
+        (OTHER.ieee, CLUSTER_SCENES, CMD_RECALL_SCENE, recall_scene_payload(GROUP, 12)),
+        (OTHER.ieee, CLUSTER_LEVEL, CMD_MOVE_TO_LEVEL, move_to_level_payload(128, 4)),
     ]
     assert hass.states.get(SELECT).state == "Read"
 
     await hass.services.async_call(
         "select", "select_option", {ATTR_ENTITY_ID: SELECT, "option": "Nightlight"}, blocking=True
     )
-    assert transport.group_commands[2] == (
-        GROUP,
-        CLUSTER_SCENES,
-        CMD_RECALL_SCENE,
-        recall_scene_payload(GROUP, 14),
-    )
+    assert transport.group_commands == [
+        (GROUP, CLUSTER_SCENES, CMD_RECALL_SCENE, recall_scene_payload(GROUP, 14))
+    ]
     assert hass.states.get("scene.zone_group_nightlight").state != STATE_UNKNOWN
 
 
