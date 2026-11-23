@@ -209,7 +209,9 @@ and the write is retried once.
   group, like ZHA's own group commands. A failed send is tried again after a short pause, so a busy
   channel can clear: the unicasts through those retries, the groupcast here.
 - **No polling or state tracking.** Lamps do not report a running palette, so the select entity shows the
-  scene started last, by any entity or service.
+  scene started last, by any entity or service. Lamps can also report that they are on up to 15 minutes
+  late. The lamps a scene started on are therefore shown on at its level right away, like ZHA does for the
+  members of a group; the next report or poll of a lamp corrects it.
 - **No Hue bridge needed.** The built-in palettes ship with the integration; nothing is read from or
   written to a bridge.
 

@@ -21,6 +21,7 @@ from custom_components.zha_scenes.protocol import (
     ATTR_HUE_FEATURES,
     CLUSTER_HUE_EFFECTS,
     CLUSTER_LEVEL,
+    CLUSTER_ON_OFF,
     CLUSTER_SCENES,
     CMD_ADD_HUE_SCENE,
     CMD_DYNAMIC_PALETTE,
@@ -199,6 +200,20 @@ async def test_group_command_timeout(hass: HomeAssistant, group: MagicMock) -> N
         )
     # only a frame that was not sent is sent again
     group.request.assert_awaited_once()
+
+
+async def test_assume_state(hass: HomeAssistant, endpoint: MagicMock) -> None:
+    on_off, level = MagicMock(), MagicMock()
+    endpoint.in_clusters = {CLUSTER_ON_OFF: on_off, CLUSTER_LEVEL: level}
+    transport = ZhaSceneTransport(hass)
+
+    transport.assume_state(lamp(1), 120)
+    level.update_attribute.assert_called_once_with(0x0000, 120)
+    assert on_off.update_attribute.call_args.args == (0x0000, True)
+
+    transport.assume_state(lamp(1), None)
+    level.update_attribute.assert_called_once()
+    assert on_off.update_attribute.call_args.args == (0x0000, False)
 
 
 async def test_start_dynamic_lamp_not_delivered(hass: HomeAssistant, endpoint: MagicMock) -> None:

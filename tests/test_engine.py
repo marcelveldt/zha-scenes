@@ -195,6 +195,19 @@ async def test_first_start_writes_scene_then_groupcasts() -> None:
     assert cache.stored(lamp(1).ieee, 0, 0x80) == CONTENT_A
 
 
+async def test_started_lamps_are_shown_on_at_the_scene_level() -> None:
+    transport, _, engine = _engine()
+    transport.answers[lamp(2).ieee] = [None]
+    contents = [(lamp(1), CONTENT_A), (lamp(2), CONTENT_B)]
+
+    assert await engine.async_start(ZONE, palette(), contents, speed=0.5) == [lamp(2)]
+    # the lamp without the scene is set through Home Assistant
+    assert transport.assumed == {lamp(1).ieee: CONTENT_A.level}
+
+    await engine.async_start(ZONE, palette(), contents, speed=0.5, brightness=100)
+    assert transport.assumed == {lamp(1).ieee: 100, lamp(2).ieee: 100}
+
+
 async def test_single_light_zone_starts_with_a_unicast() -> None:
     transport, cache, engine = _engine()
     contents = [(lamp(1), CONTENT_A)]
@@ -566,6 +579,21 @@ async def test_on_off_lights_store_nothing_and_are_set_after_the_recall() -> Non
     assert transport.requests == []
     assert transport.commands == []
     assert setter.calls[-1] == (RELAY.ieee, full, 4, 0)
+
+
+async def test_recalled_lamps_are_shown_in_their_scene_state() -> None:
+    transport, _, engine = _engine()
+    transport.answers[lamp(3).ieee] = [STATUS_INSUFFICIENT_SPACE]
+    contents = [(lamp(1), WHITE), (lamp(2), OFF), (lamp(3), WHITE), (RELAY, WHITE)]
+
+    await engine.async_recall(ZONE, 0x20, contents, Setter(transport))
+    # the lamp that stored nothing and the on/off light are set through Home Assistant
+    assert transport.assumed == {lamp(1).ieee: WHITE.level, lamp(2).ieee: None}
+
+    await engine.async_recall(ZONE, 0x20, contents, Setter(transport), brightness=100)
+    # a lamp that is off in the scene stays off
+    assert transport.assumed[lamp(1).ieee] == 100
+    assert transport.assumed[lamp(2).ieee] is None
 
 
 async def test_brightness_and_transition() -> None:

@@ -30,6 +30,7 @@ from zha.application.platforms.light.const import ColorMode
 from zigpy.exceptions import DeliveryError, ZigbeeException
 from zigpy.profiles import zha as zha_profile
 from zigpy.types import EUI64
+from zigpy.zcl.clusters.general import LevelControl, OnOff
 from zigpy.zcl.foundation import ReadAttributesResponse, Status
 
 from .const import DOMAIN
@@ -38,6 +39,8 @@ from .models import Lamp, LampKind, ZoneConfig
 from .protocol import (
     ATTR_HUE_FEATURES,
     CLUSTER_HUE_EFFECTS,
+    CLUSTER_LEVEL,
+    CLUSTER_ON_OFF,
     CLUSTER_SCENES,
     CMD_DYNAMIC_PALETTE,
     MANUFACTURER_SIGNIFY,
@@ -214,6 +217,18 @@ class ZhaSceneTransport:
                     return
         except (ZigbeeException, TimeoutError) as err:
             raise TransportError(str(err) or type(err).__name__) from err
+
+    def assume_state(self, lamp: Lamp, level: int | None) -> None:
+        """
+        Show a lamp in Home Assistant in the state it was started in; sends nothing.
+
+        :param level: Level 1..254 of a lamp that is on; None for a lamp that is off.
+        """
+        device = _gateway_proxy(self._hass).gateway.devices[EUI64.convert(lamp.ieee)]
+        clusters = device.device.endpoints[lamp.endpoint_id].in_clusters
+        if level is not None and (cluster := clusters.get(CLUSTER_LEVEL)) is not None:
+            cluster.update_attribute(LevelControl.AttributeDefs.current_level.id, level)
+        clusters[CLUSTER_ON_OFF].update_attribute(OnOff.AttributeDefs.on_off.id, level is not None)
 
 
 @callback

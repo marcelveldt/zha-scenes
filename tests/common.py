@@ -76,6 +76,8 @@ class FakeTransport:
         # ieee -> Hue features bitmap; None means no response
         self.features: dict[str, int | None] = {}
         self.feature_reads: list[str] = []
+        # ieee -> level a lamp is shown at; None means off
+        self.assumed: dict[str, int | None] = {}
         # lamps a command to one lamp cannot be sent to
         self.unreachable: set[str] = set()
 
@@ -122,3 +124,7 @@ class FakeTransport:
     ) -> None:
         """Record a groupcast command."""
         self.group_commands.append((group_id, cluster_id, command_id, payload))
+
+    def assume_state(self, lamp: Lamp, level: int | None) -> None:
+        """Record the state a lamp is shown in."""
+        self.assumed[lamp.ieee] = level
