@@ -122,6 +122,13 @@ class SceneTransport(Protocol):
         :raises TransportError: The frame could not be sent.
         """
 
+    def assume_state(self, lamp: Lamp, level: int | None) -> None:
+        """
+        Show a lamp in Home Assistant in the state it was started in; sends nothing.
+
+        :param level: Level 1..254 of a lamp that is on; None for a lamp that is off.
+        """
+
 
 @dataclass(frozen=True, slots=True)
 class LampTarget:
@@ -418,6 +425,10 @@ class SceneEngine:
                     await self._transport.async_start_dynamic_lamp(lamp, payload)
             else:
                 await self._transport.async_start_dynamic(zone.group_id, payload)
+            # the groupcast is not answered and lamps can report late
+            for lamp, content in contents:
+                if lamp not in failed:
+                    self._transport.assume_state(lamp, brightness or content.level)
             return failed
 
     async def async_recall(
@@ -534,6 +545,11 @@ class SceneEngine:
                     await self._async_send(
                         zone, dimmable, CLUSTER_LEVEL, CMD_MOVE_TO_LEVEL, payload
                     )
+            unset = {lamp.ieee for lamp, _ in missing}
+            for lamp, content in dimmable:
+                if lamp.ieee not in unset:
+                    shown = (brightness or content.level) if content.on else None
+                    self._transport.assume_state(lamp, shown)
             await asyncio.gather(
                 *(
                     set_lamp(
