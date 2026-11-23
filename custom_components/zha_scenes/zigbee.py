@@ -224,7 +224,14 @@ class ZhaSceneTransport:
 
         :param level: Level 1..254 of a lamp that is on; None for a lamp that is off.
         """
-        device = _gateway_proxy(self._hass).gateway.devices[EUI64.convert(lamp.ieee)]
+        proxy = _gateway_proxy(self._hass)
+        ref = proxy.get_entity_reference(lamp.entity_id)
+        light = ref.entity_data.entity if ref is not None else None
+        if isinstance(light, Light) and light.is_transitioning:
+            # ZHA ignores state updates of a light that is still fading
+            light.transition_off()  # type: ignore[no-untyped-call]
+            light.async_transition_complete()
+        device = proxy.gateway.devices[EUI64.convert(lamp.ieee)]
         clusters = device.device.endpoints[lamp.endpoint_id].in_clusters
         if level is not None and (cluster := clusters.get(CLUSTER_LEVEL)) is not None:
             cluster.update_attribute(LevelControl.AttributeDefs.current_level.id, level)

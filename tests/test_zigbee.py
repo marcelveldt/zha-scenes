@@ -11,8 +11,8 @@ from zha.application.platforms.light import Light, LightGroup
 from zha.application.platforms.light.const import ColorMode
 from zigpy.exceptions import DeliveryError
 from zigpy.types import EUI64
-from zigpy.zcl import foundation
-from zigpy.zcl.clusters.general import Scenes
+from zigpy.zcl import AttributeUpdatedEvent, foundation
+from zigpy.zcl.clusters.general import LevelControl, OnOff, Scenes
 
 from custom_components.zha_scenes import zigbee
 from custom_components.zha_scenes.engine import TransportError
@@ -214,6 +214,40 @@ async def test_assume_state(hass: HomeAssistant, endpoint: MagicMock) -> None:
     transport.assume_state(lamp(1), None)
     level.update_attribute.assert_called_once()
     assert on_off.update_attribute.call_args.args == (0x0000, False)
+
+
+@pytest.mark.parametrize("group_fade", [False, True])
+async def test_assume_state_ends_a_running_fade(
+    hass: HomeAssistant, endpoint: MagicMock, group_fade: bool
+) -> None:
+    zigpy_endpoint = MagicMock(endpoint_id=lamp(1).endpoint_id)
+    on_off = OnOff(zigpy_endpoint, is_server=True)
+    level = LevelControl(zigpy_endpoint, is_server=True)
+    endpoint.in_clusters = {CLUSTER_ON_OFF: on_off, CLUSTER_LEVEL: level}
+    # a light of ZHA itself, fading out
+    light = Light.__new__(Light)
+    light.__dict__.update(
+        _state=False,
+        _brightness=1,
+        _off_with_transition=True,
+        _off_brightness=200,
+        _transitioning_individual=not group_fade,
+        _transitioning_group=group_fade,
+        _transition_listener=None,
+        _transition_brightness_buffer=0,
+        debug=MagicMock(),
+        maybe_emit_state_changed_event=MagicMock(),
+    )
+    on_off.on_event(AttributeUpdatedEvent.event_type, light.handle_attribute_updated)
+    level.on_event(AttributeUpdatedEvent.event_type, light.handle_level_attribute_updated)
+    proxy = zigbee.get_zha_gateway_proxy(hass)
+    proxy.get_entity_reference.return_value.entity_data.entity = light
+
+    ZhaSceneTransport(hass).assume_state(lamp(1), 120)
+
+    assert light._state is True
+    assert light._brightness == 120
+    assert not light.is_transitioning
 
 
 async def test_start_dynamic_lamp_not_delivered(hass: HomeAssistant, endpoint: MagicMock) -> None:
